@@ -1,0 +1,1356 @@
+const API_URL = (window.APP_CONFIG && window.APP_CONFIG.API_URL)
+    ? window.APP_CONFIG.API_URL
+    : 'https://script.google.com/macros/s/AKfycbxkD5j3SVqPGtmP8mM5MepS6wpLHy_De3inQSMK_LvnIMqv5JHAGmHrrF88KAe2Oh7a3Q/exec';
+
+const baseMonths = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Set', 'Oct', 'Nov', 'Dic'];
+
+let currentArea = "", currentUser = "", currentUserRole = "";
+let currentYear = "";
+let currentIndicator = "";
+let isHistoricMode = false;
+let chartInstance = null;
+
+let dataState = {
+    num: Array(12).fill(''),
+    den: Array(12).fill(''),
+    res: Array(12).fill(''),
+    goal: Array(12).fill('')
+};
+let labels = { num: "Numerador", den: "Denominador" };
+let sacSelection = { period: "" };
+let sacStatusState = Array(12).fill('idle');
+let tableCalculationBound = false;
+let tableChartRefreshTimer = null;
+const SAC_STATE_METADATA = {
+    required: { label: 'SAC pendiente', cssClass: 'sac-state-required' },
+    pending_entry: { label: 'No', cssClass: 'sac-state-idle' }, // Usuario eligió "No", pendiente interno
+    submitted: { label: 'SAC ingresado', cssClass: 'sac-state-submitted' },
+    approved: { label: 'SAC validado', cssClass: 'sac-state-approved' },
+    idle: { label: 'Sin SAC', cssClass: 'sac-state-idle' }
+};
+
+let loginDataCache = {};
+
+function normalizeText(value) {
+    return String(value || '').trim().toLowerCase();
+}
+
+
+
+
+
+
+const DEBUG_LOGIN = true;
+function logLoginDebug(...args) { if (DEBUG_LOGIN && typeof console !== 'undefined') console.log('[LOGIN]', ...args); }
+function logLoginWarn(...args) { if (DEBUG_LOGIN && typeof console !== 'undefined') console.warn('[LOGIN]', ...args); }
+function logLoginError(...args) { if (DEBUG_LOGIN && typeof console !== 'undefined') console.error('[LOGIN]', ...args); }
+
+function normalizeLoginUserEntry(entry) {
+    if (entry === null || entry === undefined) return null;
+    if (typeof entry === 'string') {
+        const name = entry.trim();
+        return name ? { name, role: '' } : null;
+    }
+    if (typeof entry === 'object') {
+        const name = String(entry.USUARIO || entry.usuario || entry.USER || entry.user || entry.NOMBRE || entry.nombre || '').trim();
+        if (!name) return null;
+        const role = String(entry.ROL || entry.rol || entry.ROLE || entry.role || '').trim();
+        return { name, role };
+    }
+    return null;
+}
+
+function isLoginDataValid(data) {
+    if (!data || typeof data !== 'object') return false;
+    if (data.error) return false;
+    const keys = Object.keys(data).filter(k => k && k !== 'error');
+    if (!keys.length) return false;
+    return keys.some(k => Array.isArray(data[k]) ? data[k].length > 0 : !!data[k]);
+}
+
+function setLoginPlaceholders(areaMsg, userMsg) {
+    const areaSel = document.getElementById('loginArea');
+    if (areaSel) areaSel.innerHTML = `<option value="">${areaMsg}</option>`;
+    const userSel = document.getElementById('loginUser');
+    if (userSel) userSel.innerHTML = `<option value="">${userMsg}</option>`;
+}
+
+function setLoginControlsEnabled(enabled) {
+    const areaSel = document.getElementById('loginArea');
+    const userSel = document.getElementById('loginUser');
+    const submitBtn = document.getElementById('loginSubmit');
+    const controls = [areaSel, userSel, submitBtn];
+    controls.forEach(ctrl => {
+        if (!ctrl) return;
+        ctrl.disabled = !enabled;
+        ctrl.classList.toggle('opacity-60', !enabled);
+        ctrl.classList.toggle('cursor-not-allowed', !enabled);
+    });
+}
+
+function setLoginStatus(message, isError = false) {
+    const status = document.getElementById('loginStatus');
+    const retryBtn = document.getElementById('loginRetry');
+    if (!status) return;
+    if (!message) {
+        status.textContent = '';
+        status.classList.add('hidden');
+        if (retryBtn) retryBtn.classList.add('hidden');
+        return;
+    }
+    status.textContent = message;
+    status.classList.remove('hidden');
+    status.classList.toggle('text-rose-600', !!isError);
+    status.classList.toggle('text-slate-500', !isError);
+    if (retryBtn) retryBtn.classList.toggle('hidden', !isError);
+}
+
+async function reloadLoginData(force = true) {
+    setLoginControlsEnabled(false);
+    setLoginPlaceholders('Cargando áreas...', 'Cargando usuarios...');
+    setLoginStatus('Cargando áreas y usuarios...', false);
+    const freshLoginData = await apiCall('getLoginData', { _force: force });
+    if (isLoginDataValid(freshLoginData)) {
+        populateLoginUIUser(freshLoginData);
+        setLoginStatus('', false);
+        setLoginControlsEnabled(true);
+        return true;
+    }
+    const extra = freshLoginData && freshLoginData.error ? ` (${freshLoginData.error})` : '';
+    setLoginStatus(`No se pudo cargar áreas/usuarios. Verifica la hoja USUARIOS o la URL del API.${extra}`, true);
+    setLoginControlsEnabled(false);
+    return false;
+}
+
+function getLoginUsersByArea(area) {
+    const raw = (loginDataCache && area) ? loginDataCache[area] : null;
+    if (!Array.isArray(raw)) return [];
+    return raw.map(normalizeLoginUserEntry).filter(Boolean);
+}
+
+function populateLoginUsers(area) {
+    const userSelect = document.getElementById('loginUser');
+    if (!userSelect) return;
+    const users = getLoginUsersByArea(area);
+    if (!users.length) {
+        userSelect.innerHTML = `<option value="">Sin usuarios</option>`;
+        logLoginWarn('No users for area', area);
+        return;
+    }
+    userSelect.innerHTML = "";
+    users.forEach(u => userSelect.innerHTML += `<option value="${u.name}">${u.name}</option>`);
+    logLoginDebug('Users loaded for area', area, users);
+}
+
+function resolveSelectedLoginRole(area, user) {
+    const match = getLoginUsersByArea(area).find(u => normalizeText(u.name) === normalizeText(user));
+    return match ? (match.role || '') : '';
+}
+
+const ADMIN_ROLE_TOKENS = ['admin', 'administrador', 'superadmin', 'root', 'adm'];
+function isAdminSession() {
+    if (typeof isAdminUser !== 'undefined') return !!isAdminUser;
+    const role = String(currentUserRole || '').trim().toLowerCase();
+    const area = String(currentArea || '').trim().toLowerCase();
+    if (role && ADMIN_ROLE_TOKENS.some(token => role.includes(token))) return true;
+    if (area && ADMIN_ROLE_TOKENS.some(token => area.includes(token))) return true;
+    return false;
+}
+function shouldUseYearSelectForFicha() {
+    return !isHistoricMode && !isAdminSession();
+}
+
+function getFichaYearControl() {
+    return shouldUseYearSelectForFicha()
+        ? document.getElementById('periodYearSelect')
+        : document.getElementById('periodYear');
+}
+
+function updateSidebarToggleUI() {
+    const btn = document.getElementById('sidebarToggleBtn');
+    const icon = document.getElementById('sidebarToggleIcon');
+    if (!btn || !icon) return;
+    const collapsed = document.body.classList.contains('sidebar-collapsed');
+    btn.title = collapsed ? 'Mostrar barra lateral' : 'Ocultar barra lateral';
+    icon.classList.toggle('fa-angles-right', collapsed);
+    icon.classList.toggle('fa-angles-left', !collapsed);
+}
+
+function applySidebarCollapsed(collapsed) {
+    document.body.classList.toggle('sidebar-collapsed', collapsed);
+    updateSidebarToggleUI();
+}
+
+window.toggleSidebar = function () {
+    const collapsed = !document.body.classList.contains('sidebar-collapsed');
+    applySidebarCollapsed(collapsed);
+    try { localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0'); } catch (e) { }
+};
+
+function initSidebarToggle() {
+    let collapsed = false;
+    try { collapsed = localStorage.getItem('sidebarCollapsed') === '1'; } catch (e) { }
+    applySidebarCollapsed(collapsed);
+}
+
+
+/**
+ * Llena la UI de login con los datos (usado tanto para cache como para datos frescos).
+ */
+function populateLoginUIUser(loginData) {
+    if (!isLoginDataValid(loginData)) {
+        setLoginPlaceholders('No hay áreas disponibles', 'Sin usuarios');
+        setLoginStatus('No se pudo cargar áreas/usuarios. Verifica la hoja USUARIOS o la URL del API.', true);
+        setLoginControlsEnabled(false);
+        return;
+    }
+    loginDataCache = loginData;
+    const areaSel = document.getElementById('loginArea');
+    if (!areaSel) return;
+    areaSel.innerHTML = '';
+    Object.keys(loginData).forEach(a => areaSel.innerHTML += `<option value="${a}">${a}</option>`);
+    logLoginDebug('Areas loaded', Object.keys(loginData));
+
+    // Remover listeners previos clonando el elemento
+    const newAreaSel = areaSel.cloneNode(true);
+    areaSel.parentNode.replaceChild(newAreaSel, areaSel);
+
+    newAreaSel.addEventListener('change', () => {
+        populateLoginUsers(newAreaSel.value);
+    });
+
+    // CHECK SESSION
+    const savedArea = localStorage.getItem('currentArea');
+    const savedUser = localStorage.getItem('currentUser');
+    if (savedArea && savedUser && loginData[savedArea]) {
+        logLoginDebug('Saved session found', { savedArea, savedUser });
+        newAreaSel.value = savedArea;
+        newAreaSel.dispatchEvent(new Event('change'));
+        setTimeout(() => {
+            const uSel = document.getElementById('loginUser');
+            if (uSel) uSel.value = savedUser;
+            logLoginDebug('Auto-login submit');
+            document.getElementById('loginSubmit')?.click();
+        }, 10);
+    } else {
+        if (newAreaSel.options.length > 0) newAreaSel.dispatchEvent(new Event('change'));
+    }
+    if (newAreaSel && newAreaSel.value) populateLoginUsers(newAreaSel.value);
+    setLoginStatus('', false);
+    setLoginControlsEnabled(true);
+}
+
+
+// --- FUNCIONES API (con cache, batch y debounce para mejorar rendimiento) ---
+const API_CACHE_TTL = 5 * 60 * 1000; // 5 minutos (default)
+const API_CACHE_TTL_LONG = 30 * 60 * 1000; // 30 min para datos estáticos
+let apiCache = {};
+try { apiCache = JSON.parse(localStorage.getItem('apiCache') || '{}'); } catch (e) { apiCache = {}; }
+// Limpiar entradas expiradas al cargar
+(function cleanExpiredCache() {
+    const now = Date.now();
+    let cleaned = false;
+    Object.keys(apiCache).forEach(k => {
+        if (apiCache[k] && apiCache[k].ts && (now - apiCache[k].ts) > API_CACHE_TTL_LONG) {
+            delete apiCache[k];
+            cleaned = true;
+        }
+    });
+    if (cleaned) try { localStorage.setItem('apiCache', JSON.stringify(apiCache)); } catch (e) { }
+})();
+
+function saveCache() { try { localStorage.setItem('apiCache', JSON.stringify(apiCache)); } catch (e) { try { localStorage.removeItem('apiCache'); apiCache = {}; } catch (e2) { } } }
+
+function refreshAdminAreaOptions() {
+    const selectors = ['adminCreateArea', 'adminHistoricArea', 'adminDashboardArea'];
+    const areas = Object.keys(loginDataCache || {})
+        .filter(area => area && String(area).trim().toLowerCase() !== 'administrador')
+        .sort((a, b) => a.localeCompare(b));
+    const optionsHtml = areas.map(area => `<option value="${area}">${area}</option>`).join('');
+    selectors.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (areas.length) {
+            el.innerHTML = `<option value="">-- Seleccione área --</option>${optionsHtml}`;
+        } else {
+            el.innerHTML = `<option value="">No hay áreas disponibles</option>`;
+        }
+    });
+}
+
+function makeCacheKey(action, params) { return action + '|' + JSON.stringify(params || {}); }
+
+// TTL variable según tipo de acción
+function getCacheTTL(action) {
+    if (action === 'getLoginData') return API_CACHE_TTL_LONG;
+    if (action === 'getValidYears') return API_CACHE_TTL_LONG;
+    if (action === 'getSAC') return 0; // Nunca cachear SAC (datos dinámicos)
+    return API_CACHE_TTL;
+}
+
+// --- Toast de guardado (feedback visual) ---
+let _saveToastTimer = null;
+function showSaveToast(type, message) {
+    let container = document.getElementById('saveToastContainer');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'saveToastContainer';
+        container.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+        document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    const colors = {
+        saving: 'background:#1e40af;color:#fff;',
+        success: 'background:#059669;color:#fff;',
+        error: 'background:#dc2626;color:#fff;'
+    };
+    const icons = { saving: '\u23F3', success: '\u2705', error: '\u274C' };
+    toast.style.cssText = `${colors[type] || colors.saving}padding:10px 18px;border-radius:8px;font-size:13px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.25);pointer-events:auto;opacity:0;transition:opacity .3s;max-width:360px;`;
+    toast.textContent = `${icons[type] || ''} ${message}`;
+    container.appendChild(toast);
+    requestAnimationFrame(() => { toast.style.opacity = '1'; });
+    const duration = type === 'error' ? 5000 : type === 'saving' ? 15000 : 2500;
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 350);
+    }, duration);
+}
+
+async function runWithBusyCursor(task) {
+    document.body.style.cursor = 'wait';
+    try {
+        return await task();
+    } finally {
+        document.body.style.cursor = 'default';
+    }
+}
+
+async function apiCall(action, params = {}) {
+    const force = params._force === true;
+    const cleanParams = {};
+    Object.keys(params).forEach(k => { if (k !== '_force') cleanParams[k] = params[k]; });
+    const cacheKey = makeCacheKey(action, cleanParams);
+    const now = Date.now();
+    const ttl = getCacheTTL(action);
+    if (!force && apiCache[cacheKey] && (now - apiCache[cacheKey].ts) < ttl) {
+        const cached = apiCache[cacheKey].data;
+        if (action === 'getLoginData' && !isLoginDataValid(cached)) {
+            // Ignorar cache vacío o con error
+        } else {
+            return cached;
+        }
+    }
+
+    const url = new URL(API_URL);
+    url.searchParams.append('action', action);
+    Object.keys(cleanParams).forEach(k => url.searchParams.append(k, cleanParams[k]));
+    try {
+        const res = await runWithBusyCursor(() => fetch(url));
+        if (action === 'getLoginData') logLoginDebug('GET', url.toString(), 'status', res.status);
+        const json = await res.json();
+        if (action === 'getLoginData') logLoginDebug('DATA', json);
+        if (action === 'getLoginData' && !isLoginDataValid(json)) {
+            if (apiCache[cacheKey]) {
+                delete apiCache[cacheKey];
+                saveCache();
+            }
+            return json;
+        }
+        apiCache[cacheKey] = { ts: Date.now(), data: json };
+        saveCache();
+        return json;
+    } catch (e) { console.error(e); return {}; }
+}
+
+/**
+ * Llamada batch: ejecuta múltiples acciones en una sola petición HTTP.
+ */
+async function apiBatchCall(requests, forceAll = false) {
+    if (!requests || !requests.length) return {};
+    const now = Date.now();
+    const results = {};
+    const pendingRequests = [];
+    requests.forEach(req => {
+        const cleanParams = {};
+        if (req.params) Object.keys(req.params).forEach(k => { if (k !== '_force') cleanParams[k] = req.params[k]; });
+        const cacheKey = makeCacheKey(req.action, cleanParams);
+        const ttl = getCacheTTL(req.action);
+        if (!forceAll && apiCache[cacheKey] && (now - apiCache[cacheKey].ts) < ttl) {
+            results[req.id] = apiCache[cacheKey].data;
+        } else {
+            pendingRequests.push({ id: req.id, action: req.action, params: cleanParams });
+        }
+    });
+    if (!pendingRequests.length) return results;
+    try {
+        const url = new URL(API_URL);
+        url.searchParams.append('action', 'getBatch');
+        url.searchParams.append('requests', JSON.stringify(pendingRequests));
+        const res = await runWithBusyCursor(() => fetch(url));
+        const json = await res.json();
+        if (json && json.results) {
+            Object.keys(json.results).forEach(id => {
+                results[id] = json.results[id];
+                const req = pendingRequests.find(r => r.id === id);
+                if (req) {
+                    const cacheKey = makeCacheKey(req.action, req.params);
+                    apiCache[cacheKey] = { ts: Date.now(), data: json.results[id] };
+                }
+            });
+            saveCache();
+        }
+    } catch (e) {
+        console.error('Batch call failed, falling back:', e);
+        const fallback = await Promise.all(pendingRequests.map(req =>
+            apiCall(req.action, req.params || {}).then(data => ({ id: req.id, data }))
+        ));
+        fallback.forEach(r => { results[r.id] = r.data; });
+    }
+    return results;
+}
+
+async function apiPost(action, payload) {
+    const payloadStr = JSON.stringify(payload || {});
+    console.log('[apiPost] Enviando:', action, 'payload length:', payloadStr.length);
+
+    let json = null;
+
+    // --- Estrategia 1: GET con payload en URL (más fiable con Google Apps Script) ---
+    // Los POST a GAS sufren redirect 302 que cambia POST→GET y pierde el body.
+    // GET funciona siempre; si el payload es pequeño (<6000 chars) lo enviamos así.
+    if (payloadStr.length < 6000) {
+        try {
+            const url = new URL(API_URL);
+            url.searchParams.append('action', action);
+            url.searchParams.append('payload', payloadStr);
+            const res = await runWithBusyCursor(() => fetch(url));
+            json = await res.json();
+            console.log('[apiPost/GET]', action, json && json.success ? 'OK' : 'FAIL', json);
+        } catch (getErr) {
+            console.warn('[apiPost/GET] falló, intentando POST...', getErr);
+            json = null;
+        }
+    }
+
+    // --- Estrategia 2: POST clásico (fallback para payloads grandes o si GET falla) ---
+    if (!json || (!json.success && !json.error)) {
+        try {
+            const body = JSON.stringify({ action, payload });
+            const res = await runWithBusyCursor(() => fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: body,
+                redirect: 'follow'
+            }));
+            json = await res.json();
+            console.log('[apiPost/POST]', action, json && json.success ? 'OK' : 'FAIL', json);
+        } catch (postErr) {
+            console.error('[apiPost/POST] Error:', postErr);
+            json = { success: false, error: postErr.message || 'Error de red al guardar' };
+        }
+    }
+
+    // --- Invalidar cache relevante si el guardado fue exitoso ---
+    if (json && json.success) {
+        try {
+            // Detectar campos de identificación (soportar mayúsculas y minúsculas)
+            const pIndicator = payload.indicator || payload.INDICADOR || '';
+            const pYear = payload.year || payload.YEAR || '';
+            const pPeriod = payload.period || payload.PERIODO || '';
+            const pArea = payload.area || payload.AREA || '';
+
+            if (pIndicator || pArea) {
+                const keysToDelete = [];
+                Object.keys(apiCache).forEach(k => {
+                    if (k.startsWith('getIndicatorData') || k.startsWith('getSAC') ||
+                        k.startsWith('getIndicators') || k.startsWith('getValidYears')) {
+                        if ((pIndicator && k.includes(pIndicator)) ||
+                            (pYear && k.includes(String(pYear))) ||
+                            (pPeriod && k.includes(pPeriod)) ||
+                            (pArea && k.includes(pArea))) {
+                            keysToDelete.push(k);
+                        }
+                    }
+                });
+                keysToDelete.forEach(k => delete apiCache[k]);
+            }
+            saveCache();
+        } catch (e) { console.warn('[apiPost] cache invalidation error', e); }
+    }
+
+    return json || { success: false, error: 'No se obtuvo respuesta del servidor' };
+}
+
+// Debounce helper
+function debounce(fn, wait) { let t; return function (...args) { clearTimeout(t); t = setTimeout(() => fn.apply(this, args), wait); }; }
+
+const YEAR_FIELD_CANDIDATES = ['year', 'anio', 'año', 'ANO', 'AÑO', 'value', 'valor', 'VALUE'];
+
+function getYearFromEntry(entry) {
+    if (entry === null || entry === undefined) return null;
+    if (typeof entry === 'string' || typeof entry === 'number') {
+        return String(entry).trim();
+    }
+    if (typeof entry !== 'object') return null;
+    for (const candidate of YEAR_FIELD_CANDIDATES) {
+        if (candidate in entry) {
+            const value = entry[candidate];
+            if (value !== undefined && value !== null && String(value).trim() !== '') {
+                return String(value).trim();
+            }
+        }
+    }
+    if ('years' in entry && Array.isArray(entry.years)) {
+        return getYearFromEntry(entry.years[0]);
+    }
+    return null;
+}
+
+function parseYearEntries(payload) {
+    if (!payload) return [];
+    const entries = Array.isArray(payload) ? payload : (payload.years && Array.isArray(payload.years) ? payload.years : []);
+    return entries.map(entry => getYearFromEntry(entry)).filter(Boolean);
+}
+
+function setYearSelectOptions(selectEl, yearLabels, emptyMessage = "Sin años completos") {
+    if (!yearLabels || yearLabels.length === 0) {
+        selectEl.innerHTML = `<option>${emptyMessage}</option>`;
+        return;
+    }
+    selectEl.innerHTML = `<option value="">-- SELECCIONAR AÑO --</option>`;
+    yearLabels.forEach(year => {
+        selectEl.innerHTML += `<option value="${year}">${year}</option>`;
+    });
+}
+
+// --- INICIALIZACIÓN ---
+window.addEventListener('DOMContentLoaded', async () => {
+    initSidebarToggle();
+    bindEditableTableCalculation();
+    const periodYearInput = document.getElementById('periodYear');
+    if (periodYearInput) periodYearInput.value = "";
+    const periodYearSelect = document.getElementById('periodYearSelect');
+    if (periodYearSelect) periodYearSelect.value = "";
+
+    setLoginControlsEnabled(false);
+    setLoginPlaceholders('Cargando áreas...', 'Cargando usuarios...');
+    setLoginStatus('Cargando áreas y usuarios...', false);
+
+    // Pre-cargar datos de login desde cache local mientras se consulta la API
+    let loginData = null;
+    const cachedLoginKey = makeCacheKey('getLoginData', {});
+    const cachedLoginData = apiCache[cachedLoginKey] ? apiCache[cachedLoginKey].data : null;
+    if (isLoginDataValid(cachedLoginData)) {
+        loginData = cachedLoginData;
+        populateLoginUIUser(loginData);
+    }
+
+    // Cargar datos Login desde la API (actualiza si hay nuevo dato)
+    const freshLoginData = await apiCall('getLoginData', { _force: !loginData });
+    if (isLoginDataValid(freshLoginData)) {
+        loginData = freshLoginData;
+        if (!cachedLoginData || JSON.stringify(freshLoginData) !== JSON.stringify(cachedLoginData)) {
+            populateLoginUIUser(loginData);
+        }
+    } else if (!loginData) {
+        const extra = freshLoginData && freshLoginData.error ? ` (${freshLoginData.error})` : '';
+        setLoginStatus(`No se pudo cargar áreas/usuarios. Verifica la hoja USUARIOS o la URL del API.${extra}`, true);
+        setLoginControlsEnabled(false);
+    }
+    loginDataCache = loginData || {};
+
+    refreshAdminAreaOptions();
+
+    const loginRetryBtn = document.getElementById('loginRetry');
+    if (loginRetryBtn) {
+        loginRetryBtn.addEventListener('click', () => { reloadLoginData(true); });
+    }
+
+    document.getElementById('loginSubmit').addEventListener('click', () => {
+        currentArea = (document.getElementById('loginArea').value || '').trim();
+        currentUser = (document.getElementById('loginUser').value || '').trim();
+        logLoginDebug('Selected area/user', currentArea, currentUser);
+        if (currentArea && !currentUser) {
+            const users = getLoginUsersByArea(currentArea);
+            if (users.length) {
+                currentUser = users[0].name;
+                const uSel = document.getElementById('loginUser');
+                if (uSel) uSel.value = currentUser;
+            }
+        }
+        currentUserRole = resolveSelectedLoginRole(currentArea, currentUser);
+        if (!currentArea || !currentUser) {
+            logLoginWarn('Blocked login: missing area or user', { currentArea, currentUser });
+            return;
+        }
+
+        localStorage.setItem('currentArea', currentArea);
+        localStorage.setItem('currentUser', currentUser);
+        localStorage.setItem('currentUserRole', currentUserRole || '');
+
+        document.getElementById('headerUpdatedBy').value = currentUser;
+        const loginInfoBadge = document.getElementById('loginInfoBadge');
+        if (loginInfoBadge) {
+            loginInfoBadge.textContent = `${currentArea} · ${currentUser}`;
+        }
+        document.getElementById('loginModal').classList.add('hidden');
+        logLoginDebug('Login modal hidden; user logged in');
+
+        if (typeof evaluateAdminPrivileges === 'function') {
+            try { evaluateAdminPrivileges(); } catch (err) { console.error('evaluateAdminPrivileges', err); }
+        }
+        try { if (typeof loadIndicatorsList === 'function') loadIndicatorsList(); } catch (err) { console.error('loadIndicatorsList', err); }
+        try { loadPeriodYearsForFicha(currentIndicator); } catch (err) { console.error('loadPeriodYearsForFicha', err); }
+        try { renderTableStructure(); } catch (err) { console.error('renderTableStructure', err); }
+        try { initEmptyChart(); } catch (err) { console.error('initEmptyChart', err); }
+        try { setFichaEditableState(); } catch (err) { console.error('setFichaEditableState', err); }
+        try { if (typeof showPendingSACModal === 'function') showPendingSACModal(); } catch (err) { console.error('showPendingSACModal', err); }
+    });
+
+    // Actualizar tabla/gráfico cuando cambie la unidad de resultado
+    document.getElementById('resultUnit').addEventListener('change', () => { renderTable(); updateChart(); });
+    // Listener cambio año (solo en ficha técnica)
+    document.getElementById('periodYear').addEventListener('change', debounce((e) => {
+        if (isHistoricMode) return;
+        currentYear = String(e.target.value || '').trim();
+        renderTableStructure();
+        const indSel = document.getElementById('indicatorName');
+        currentIndicator = '';
+        if (indSel) indSel.value = '';
+        if (!currentYear) {
+            if (indSel) indSel.disabled = true;
+            resetUI(true);
+            if (typeof setFichaEditableState === 'function') setFichaEditableState();
+            return;
+        }
+        resetUI(true);
+        if (indSel) indSel.disabled = true;
+        loadIndicatorsList(currentYear);
+        if (typeof setFichaEditableState === 'function') setFichaEditableState();
+    }, 250));
+
+    // Listener cambio año histórico (Select)
+    document.getElementById('periodYearSelect').addEventListener('change', debounce((e) => {
+        currentYear = String(e.target.value || '').trim();
+        renderTableStructure();
+        if (isHistoricMode) {
+            // After choosing year, enable indicator select and load list
+            const indSel = document.getElementById('indicatorName');
+            indSel.disabled = false;
+            loadIndicatorsList(currentYear);
+            if (currentIndicator) loadData(currentIndicator, currentYear);
+            return;
+        }
+        if (shouldUseYearSelectForFicha()) {
+            const indSel = document.getElementById('indicatorName');
+            currentIndicator = '';
+            if (indSel) indSel.value = '';
+            if (!currentYear) {
+                if (indSel) indSel.disabled = true;
+                resetUI(true);
+                if (typeof setFichaEditableState === 'function') setFichaEditableState();
+                return;
+            }
+            resetUI(true);
+            if (indSel) indSel.disabled = true;
+            loadIndicatorsList(currentYear);
+            if (typeof setFichaEditableState === 'function') setFichaEditableState();
+        }
+    }, 250));
+
+
+});
+
+async function loadPeriodYearsForFicha(indicator) {
+    const yearInput = document.getElementById('periodYear');
+    const yearSelect = document.getElementById('periodYearSelect');
+    const yearList = document.getElementById('periodYearList');
+    const useSelect = shouldUseYearSelectForFicha() && yearSelect;
+    if (yearList) yearList.innerHTML = '';
+    if (yearInput) yearInput.placeholder = 'Escriba a\u00f1o';
+    if (useSelect) yearSelect.innerHTML = '<option value="">Cargando...</option>';
+
+    if (!currentArea) {
+        if (useSelect) yearSelect.innerHTML = '<option value="">Seleccione \u00e1rea</option>';
+        if (yearInput) yearInput.placeholder = 'Seleccione \u00e1rea';
+        return [];
+    }
+    try {
+        const allPayload = await apiCall('getValidYears', { area: currentArea, complete: 0 });
+        const allYears = Array.from(new Set(parseYearEntries(allPayload)))
+            .filter(Boolean)
+            .map(y => String(y).trim());
+        if (!allYears.length) {
+            if (useSelect) yearSelect.innerHTML = '<option value="">Sin a\u00f1os disponibles</option>';
+            if (yearInput) yearInput.placeholder = 'Sin a\u00f1os disponibles';
+            return [];
+        }
+
+        const norm = (value) => String(value || "").trim().toLowerCase();
+        const checks = await Promise.all(allYears.map(async (year) => {
+            const [allIndicators, completeIndicators] = await Promise.all([
+                apiCall('getIndicators', { area: currentArea, year }),
+                apiCall('getIndicators', { area: currentArea, year, complete: 1 })
+            ]);
+            const allList = Array.isArray(allIndicators) ? allIndicators : [];
+            const completeList = Array.isArray(completeIndicators) ? completeIndicators : [];
+            if (!allList.length) return null;
+            const completeSet = new Set(completeList.map(norm));
+            const incomplete = allList.filter(ind => !completeSet.has(norm(ind)));
+            return incomplete.length ? year : null;
+        }));
+
+        const filteredYears = checks.filter(Boolean);
+        if (!filteredYears.length) {
+            if (useSelect) yearSelect.innerHTML = '<option value="">Sin a\u00f1os disponibles</option>';
+            if (yearInput) yearInput.placeholder = 'Sin a\u00f1os disponibles';
+            return [];
+        }
+        filteredYears.sort((a, b) => Number(b) - Number(a));
+        if (useSelect) {
+            yearSelect.innerHTML = '<option value="">-- Seleccionar a\u00f1o --</option>' + filteredYears.map(year => `<option value="${year}">${year}</option>`).join('');
+        } else if (yearList) {
+            yearList.innerHTML = filteredYears.map(year => `<option value="${year}"></option>`).join('');
+        }
+        return filteredYears;
+    } catch (e) {
+        console.error(e);
+        if (useSelect) yearSelect.innerHTML = '<option value="">Error al cargar a\u00f1os</option>';
+        if (yearInput) yearInput.placeholder = 'Error al cargar a\u00f1os';
+        return [];
+    }
+}
+function resolveFichaFrequency(rows) {
+    const firstRow = Array.isArray(rows) ? rows.find(r => r) : null;
+    let freq = String(firstRow?.FRECUENCIA || '').trim().toUpperCase();
+    if (freq) return freq;
+    const raw = String(firstRow?.MES_TABLA || '').trim().toUpperCase().replace(/\s+/g, '');
+    if (!raw) return 'MENSUAL';
+    if (/^(1ER|2DO|3ER|4TO)/.test(raw)) return 'TRIMESTRAL';
+    if (/^\d{4}$/.test(raw)) return 'ANUAL';
+    return 'MENSUAL';
+}
+
+function getFichaYearFromRow(row) {
+    const candidates = ['A\u00D1O_TABLA', 'ANO_TABLA', 'A\u00D1O', 'ANO'];
+    for (let i = 0; i < candidates.length; i++) {
+        const value = row ? row[candidates[i]] : null;
+        if (value !== null && value !== undefined && String(value).trim() !== '') {
+            return String(value).trim();
+        }
+    }
+    return '';
+}
+
+function getFichaYearFromRows(rows) {
+    if (!Array.isArray(rows)) return '';
+    for (let i = 0; i < rows.length; i++) {
+        const year = getFichaYearFromRow(rows[i]);
+        if (year) return year;
+    }
+    return '';
+}
+
+function normalizeFichaMonthKey(raw) {
+    const up = String(raw || '').trim().toUpperCase();
+    if (!up) return '';
+    const map = {
+        'ENE': 'ENE', 'ENERO': 'ENE',
+        'FEB': 'FEB', 'FEBRERO': 'FEB',
+        'MAR': 'MAR', 'MARZO': 'MAR',
+        'ABR': 'ABR', 'ABRIL': 'ABR',
+        'MAY': 'MAY', 'MAYO': 'MAY',
+        'JUN': 'JUN', 'JUNIO': 'JUN',
+        'JUL': 'JUL', 'JULIO': 'JUL',
+        'AGO': 'AGO', 'AGOSTO': 'AGO',
+        'SET': 'SET', 'SEPTIEMBRE': 'SET', 'SETIEMBRE': 'SET', 'SEP': 'SET',
+        'OCT': 'OCT', 'OCTUBRE': 'OCT',
+        'NOV': 'NOV', 'NOVIEMBRE': 'NOV',
+        'DIC': 'DIC', 'DICIEMBRE': 'DIC'
+    };
+    if (map[up]) return map[up];
+    const short = up.substring(0, 3);
+    if (map[short]) return map[short];
+    return short;
+}
+
+function normalizeFichaQuarterKey(raw) {
+    const up = String(raw || '').trim().toUpperCase().replace(/\s+/g, '');
+    if (!up) return '';
+    const match = up.match(/^(1ER|2DO|3ER|4TO)/);
+    if (match) return match[1];
+    return up.substring(0, 3);
+}
+
+function normalizeFichaPeriodKey(raw, frequency, row) {
+    const freq = String(frequency || '').trim().toUpperCase();
+    if (freq === 'TRIMESTRAL') return normalizeFichaQuarterKey(raw);
+    if (freq === 'ANUAL') {
+        const yearVal = String(raw || getFichaYearFromRow(row) || '').trim();
+        return yearVal;
+    }
+    return normalizeFichaMonthKey(raw);
+}
+
+function getFichaExpectedKeys(frequency, rows) {
+    const freq = String(frequency || '').trim().toUpperCase();
+    if (freq === 'ANUAL') {
+        const year = getFichaYearFromRows(rows);
+        return year ? [String(year)] : [];
+    }
+    if (freq === 'TRIMESTRAL') return ['1ER', '2DO', '3ER', '4TO'];
+    return baseMonths.map(m => String(m).trim().toUpperCase().substring(0, 3));
+}
+
+function hasMissingNumeratorOrDenominator(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) return true;
+    const frequency = resolveFichaFrequency(rows);
+    const expectedKeys = getFichaExpectedKeys(frequency, rows);
+    if (!expectedKeys.length) return true;
+    const filled = new Set();
+    rows.forEach(row => {
+        if (!row) return;
+        const num = row.NUMERADOR;
+        const den = row.DENOMINADOR;
+        if (num === null || num === undefined || String(num).trim() === '') return;
+        if (den === null || den === undefined || String(den).trim() === '') return;
+        const key = normalizeFichaPeriodKey(row.MES_TABLA, frequency, row);
+        if (key) filled.add(key);
+    });
+    return expectedKeys.some(key => !filled.has(key));
+}
+
+function resetUI(keepIndicator = false) {
+    if (!keepIndicator) {
+        document.getElementById('indicatorName').value = "";
+        currentIndicator = "";
+    }
+    ['headerResponsable', 'indicatorObjective', 'currentGoal', 'prevGoal', 'comments', 'sourceInfo', 'updateDate'].forEach(id => {
+        const el = document.getElementById(id);
+        el.value = "";
+        el.classList.remove('text-red-500', 'font-bold');
+    });
+    const fDisp = document.getElementById('formulaDisplay');
+    if (fDisp) fDisp.innerHTML = "";
+    const calcEl = document.getElementById('formulaCalcDisplay');
+    if (calcEl) {
+        calcEl.textContent = "";
+        calcEl.classList.add('hidden');
+    }
+    dataState = { num: Array(12).fill(''), den: Array(12).fill(''), res: Array(12).fill(''), goal: Array(12).fill('') };
+    sacStatusState = Array(12).fill('idle');
+    renderTable();
+    initEmptyChart();
+}
+
+function toggleInputs(disable) {
+    const inputs = document.querySelectorAll('.section-container input, .section-container textarea, .section-container select');
+    inputs.forEach(el => {
+        if (el.id !== 'indicatorName') {
+            el.disabled = disable;
+            if (disable) el.classList.add('bg-slate-50', 'text-slate-500');
+            else el.classList.remove('bg-slate-50', 'text-slate-500');
+        }
+    });
+}
+
+function setTableNumDenEditable(enabled) {
+    const inputs = document.querySelectorAll('#horizontalTableBody input[data-row]');
+    inputs.forEach(input => {
+        const rowKey = String(input.getAttribute('data-row') || '').toLowerCase();
+        if (rowKey !== 'num' && rowKey !== 'den') return;
+        input.disabled = !enabled;
+        if (enabled) input.classList.remove('bg-slate-50', 'text-slate-500');
+        else input.classList.add('bg-slate-50', 'text-slate-500');
+    });
+}
+
+function setFichaEditableState() {
+    const yearInput = document.getElementById('periodYear');
+    const yearSelect = document.getElementById('periodYearSelect');
+    if (isHistoricMode) {
+        toggleInputs(true);
+        setFichaAuxFieldsDisabled(true);
+        if (yearInput) {
+            yearInput.disabled = true;
+            yearInput.classList.add('bg-slate-50', 'text-slate-500');
+        }
+        if (yearSelect) {
+            yearSelect.disabled = false;
+            yearSelect.classList.remove('bg-slate-50', 'text-slate-500');
+        }
+        const indicatorSelect = document.getElementById('indicatorName');
+        if (indicatorSelect) {
+            indicatorSelect.disabled = !String(currentYear || "").trim();
+            indicatorSelect.classList.toggle('bg-slate-50', indicatorSelect.disabled);
+            indicatorSelect.classList.toggle('text-slate-500', indicatorSelect.disabled);
+        }
+        setTableNumDenEditable(false);
+        return;
+    }
+    const adminUser = isAdminSession();
+    if (adminUser) {
+        toggleInputs(false);
+        setFichaAuxFieldsDisabled(false);
+    } else {
+        // Non-admin: only allow numerador/denominador in the table
+        toggleInputs(true);
+        setFichaAuxFieldsDisabled(true);
+    }
+    setTableNumDenEditable(true);
+    const useSelect = shouldUseYearSelectForFicha();
+    if (useSelect) {
+        if (yearSelect) {
+            yearSelect.disabled = false;
+            yearSelect.classList.remove('bg-slate-50', 'text-slate-500');
+            yearSelect.classList.remove('hidden');
+        }
+        if (yearInput) {
+            yearInput.disabled = true;
+            yearInput.classList.add('bg-slate-50', 'text-slate-500');
+            yearInput.classList.add('hidden');
+        }
+    } else {
+        if (yearInput) {
+            yearInput.disabled = false;
+            yearInput.classList.remove('bg-slate-50', 'text-slate-500');
+            yearInput.classList.remove('hidden');
+        }
+        if (yearSelect) {
+            yearSelect.disabled = true;
+            yearSelect.classList.add('bg-slate-50', 'text-slate-500');
+            yearSelect.classList.add('hidden');
+        }
+    }
+    const indicatorSelect = document.getElementById('indicatorName');
+    const yearControl = (typeof getFichaYearControl === 'function') ? getFichaYearControl() : null;
+    const yearValue = yearControl ? String(yearControl.value || "").trim() : "";
+    const canSelectIndicator = !!yearValue;
+    if (indicatorSelect) {
+        indicatorSelect.disabled = !canSelectIndicator;
+        indicatorSelect.classList.toggle('bg-slate-50', !canSelectIndicator);
+        indicatorSelect.classList.toggle('text-slate-500', !canSelectIndicator);
+    }
+}
+function setFichaAuxFieldsDisabled(disabled) {
+    const ids = [
+        'updateDate',
+        'frequency',
+        'resultUnit',
+        'sourceInfo',
+        'currentGoal',
+        'prevGoal',
+        'comments',
+        'indicatorObjective'
+    ];
+    ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.disabled = disabled;
+        if (disabled) el.classList.add('bg-slate-50', 'text-slate-500');
+        else el.classList.remove('bg-slate-50', 'text-slate-500');
+    });
+}
+
+function parseNumericValue(value) {
+    if (value === null || value === undefined) return NaN;
+    const normalized = String(value).replace(',', '.').replace(/%/g, '').trim();
+    if (normalized === '') return NaN;
+    return Number(normalized);
+}
+
+function scaleForUnit(value, unit) {
+    const num = parseNumericValue(value);
+    if (!isFinite(num)) return null;
+    if (unit === '%') return num * 100;
+    return num;
+}
+
+function formatNumber(value, decimals = 2) {
+    if (!isFinite(value)) return null;
+    const factor = Math.pow(10, decimals);
+    const rounded = Math.round(value * factor) / factor;
+    const fixed = rounded.toFixed(decimals);
+    return fixed.replace(/\.?0+$/, '');
+}
+
+function formatDisplayValue(rawValue, decimals, appendPercent = false, unit = '') {
+    const scaled = scaleForUnit(rawValue, unit);
+    if (scaled === null) return null;
+    const formatted = formatNumber(scaled, decimals);
+    if (formatted === null) return null;
+    return appendPercent ? `${formatted}%` : formatted;
+}
+
+function recalculateResultForIndex(idx) {
+    if (!Number.isFinite(idx) || idx < 0 || idx >= baseMonths.length) return;
+    const num = parseNumericValue(dataState.num[idx]);
+    const den = parseNumericValue(dataState.den[idx]);
+    if (!isFinite(num) || !isFinite(den) || den === 0) {
+        dataState.res[idx] = '';
+        return;
+    }
+    dataState.res[idx] = num / den;
+}
+
+function updateResultCellDisplay(idx) {
+    if (!Number.isFinite(idx) || idx < 0 || idx >= baseMonths.length) return;
+    const unitEl = document.getElementById('resultUnit');
+    const unit = unitEl ? (unitEl.value || '') : '';
+    const isPercentUnit = unit === '%';
+    const resInput = document.querySelector(`#horizontalTableBody input[data-row="res"][data-idx="${idx}"]`);
+    if (!resInput) return;
+    const display = formatDisplayValue(dataState.res[idx], 2, isPercentUnit, unit);
+    resInput.value = display || '';
+    const isDanger = needsSAC(dataState.res[idx], dataState.goal[idx]);
+    resInput.classList.toggle('sac-needed-input', isDanger);
+}
+
+function scheduleChartRefreshFromTable() {
+    clearTimeout(tableChartRefreshTimer);
+    tableChartRefreshTimer = setTimeout(() => updateChart(), 100);
+}
+
+function handleEditableTableCalculation(target, finalize) {
+    if (!target || !target.dataset) return;
+    const rowKey = String(target.dataset.row || '').toLowerCase();
+    if (rowKey !== 'num' && rowKey !== 'den') return;
+    if (isHistoricMode || target.disabled) return;
+    const idx = Number(target.dataset.idx);
+    if (!Number.isFinite(idx) || idx < 0 || idx >= baseMonths.length) return;
+
+    dataState[rowKey][idx] = String(target.value ?? '').trim();
+    recalculateResultForIndex(idx);
+    updateResultCellDisplay(idx);
+    scheduleChartRefreshFromTable();
+
+    if (finalize) {
+        renderTable();
+        setFichaEditableState();
+        updateChart();
+
+        // --- Guardado automático de datos ---
+        const savePayload = {
+            area: currentArea,
+            indicator: currentIndicator,
+            year: currentYear,
+            period: baseMonths[idx],
+            num: dataState.num[idx],
+            den: dataState.den[idx],
+            res: dataState.res[idx],
+            goal: dataState.goal[idx],
+            user: currentUser
+        };
+
+        showSaveToast('saving', `Guardando ${baseMonths[idx]}...`);
+        apiPost('saveIndicatorData', savePayload).then(res => {
+            if (!res || !res.success) {
+                console.error('[AutoSave] Error:', res);
+                const errMsg = (res && res.error) ? res.error : 'Error desconocido al guardar';
+                showSaveToast('error', `Error guardando ${baseMonths[idx]}: ${errMsg}`);
+            } else {
+                console.log('[AutoSave] Éxito para', baseMonths[idx]);
+                showSaveToast('success', `${baseMonths[idx]} guardado correctamente`);
+            }
+        });
+
+        // --- Auto-prompt SAC si resultado < meta y no hay SAC aún ---
+        const sacNeeded = needsSAC(dataState.res[idx], dataState.goal[idx]);
+        const currentStatus = sacStatusState[idx];
+        if (sacNeeded &&
+            currentStatus !== 'submitted' &&
+            currentStatus !== 'approved' &&
+            currentStatus !== 'pending_entry') {
+            showSACPrompt(idx).then(answer => {
+                if (answer === 'yes') {
+                    openSAC(idx);
+                    return;
+                }
+                createPendingSACBackend(idx);
+            });
+        }
+    }
+}
+
+function bindEditableTableCalculation() {
+    if (tableCalculationBound) return;
+    const tbody = document.getElementById('horizontalTableBody');
+    if (!tbody) return;
+    tbody.addEventListener('input', (event) => handleEditableTableCalculation(event.target, false));
+    tbody.addEventListener('change', (event) => handleEditableTableCalculation(event.target, true));
+    tableCalculationBound = true;
+}
+
+function computeWeightedAverage(unit) {
+    let totalWeight = 0;
+    let weightedSum = 0;
+    for (let i = 0; i < baseMonths.length; i++) {
+        const resVal = scaleForUnit(dataState.res[i], unit);
+        const weight = parseNumericValue(dataState.den[i]);
+        const weightVal = isFinite(weight) && weight !== 0 ? weight : 1;
+        if (!isFinite(resVal)) continue;
+        totalWeight += weightVal;
+        weightedSum += resVal * weightVal;
+    }
+    if (totalWeight === 0) return null;
+    return weightedSum / totalWeight;
+}
+
+function needsSAC(resultValue, goalValue) {
+    const resultNum = parseNumericValue(resultValue);
+    const goalNum = parseNumericValue(goalValue);
+    if (!isFinite(resultNum) || !isFinite(goalNum)) return false;
+    const tolerance = 0.01;
+    return resultNum + tolerance < goalNum;
+}
+
+function mapIncomingSACStatus(rawStatus) {
+    if (!rawStatus && rawStatus !== 0) return null;
+    const normalized = String(rawStatus).toLowerCase();
+    if (normalized.includes('aprob') || normalized.includes('valid')) return 'approved';
+
+    // PENDIENTE -> pending_entry (pendiente interno)
+    if (normalized.includes('pend') && !normalized.includes('ingres') && !normalized.includes('enviado')) return 'pending_entry';
+
+    // ENVIADO, INGRESADO -> submitted (Naranja)
+    if (normalized.includes('ingres') || normalized.includes('enviado') || normalized.includes('espera') || normalized.includes('revis')) return 'submitted';
+
+    return null;
+}
+
+function refreshSACStates() {
+    const needs = baseMonths.map((_, idx) => needsSAC(dataState.res[idx], dataState.goal[idx]));
+    sacStatusState = sacStatusState.map((state, idx) => {
+        if (!needs[idx]) return 'idle';
+        if (state === 'approved') return 'approved';
+        if (state === 'submitted') return 'submitted';
+        if (state === 'pending_entry') return 'pending_entry';
+        return 'required';
+    });
+    return needs;
+}
+
+function setSACState(idx, status) {
+    if (typeof idx !== 'number' || idx < 0 || idx >= baseMonths.length) return;
+    if (!status || !(status in SAC_STATE_METADATA)) return;
+    sacStatusState[idx] = status;
+    renderTable();
+}
+
+function renderTableStructure() {
+    const suffix = currentYear ? ` ${String(currentYear).slice(-2)}` : '';
+    const currentMonths = baseMonths.map(m => `${m}${suffix}`);
+    const thead = document.getElementById('tableHeaderRow');
+    while (thead.children.length > 1) thead.removeChild(thead.lastChild);
+    currentMonths.forEach(m => {
+        const th = document.createElement('th');
+        th.className = "p-2 border-r border-slate-600 text-center min-w-[80px]";
+        th.textContent = m;
+        thead.appendChild(th);
+    });
+    renderTable();
+}
+
+function renderTable() {
+    const tbody = document.getElementById('horizontalTableBody');
+    tbody.innerHTML = '';
+    const unitEl = document.getElementById('resultUnit');
+    const unit = unitEl ? (unitEl.value || '') : '';
+    const isPercentUnit = unit === '%';
+    const resLabel = `Resultado (${unit})`;
+    const needsSacFlags = refreshSACStates();
+    const actionStates = sacStatusState.slice();
+
+    const rows = [
+        { key: 'num', label: labels.num },
+        { key: 'den', label: labels.den },
+        { key: 'res', label: resLabel, isResult: true, formatDecimals: 2, appendPercent: isPercentUnit, showStar: true },
+        { key: 'goal', label: 'Meta', formatDecimals: 2, appendPercent: isPercentUnit },
+        { key: 'action', label: 'Acción', isAction: true }
+    ];
+
+    rows.forEach(def => {
+        const tr = document.createElement('tr');
+        if (def.showStar) {
+            tr.innerHTML = `
+                <th class="p-3 text-left bg-slate-50 border-r border-b border-slate-200 text-xs font-bold text-slate-700 sticky left-0 shadow-sm">
+                    <span class="inline-flex items-center gap-2">
+                        ${def.label}
+                        <button type="button" onclick="openWeightedModal()" title="Promedio ponderado" class="text-amber-500 hover:text-amber-600">
+                            <i class="fa-solid fa-star"></i>
+                        </button>
+                    </span>
+                </th>`;
+        } else {
+            tr.innerHTML = `<th class="p-3 text-left bg-slate-50 border-r border-b border-slate-200 text-xs font-bold text-slate-700 sticky left-0 shadow-sm">${def.label}</th>`;
+        }
+        const values = def.isAction ? actionStates : dataState[def.key];
+        values.forEach((val, idx) => {
+            if (def.isAction) {
+                if (!needsSacFlags[idx]) {
+                    tr.innerHTML += `<td class="border-r border-b border-slate-200 p-0 h-10 min-w-[80px]"><div class="flex items-center justify-center h-full">&nbsp;</div></td>`;
+                    return;
+                }
+                const status = actionStates[idx] || 'idle';
+                const meta = SAC_STATE_METADATA[status] || SAC_STATE_METADATA.idle;
+                const actionHtml = `<button type="button" class="sac-icon-button" onclick="openSAC(${idx})" title="${meta.label}" aria-label="${meta.label}"><i class="fa-solid fa-book sac-icon ${meta.cssClass}"></i></button>`;
+                tr.innerHTML += `<td class="border-r border-b border-slate-200 p-0 h-10 min-w-[80px]"><div class="flex items-center justify-center h-full">${actionHtml}</div></td>`;
+                return;
+            }
+
+            const isRes = def.isResult;
+            const clickAttr = '';
+            let readonly = "readonly";
+            let isEditable = false;
+            if (!isHistoricMode && (def.key === 'num' || def.key === 'den')) {
+                isEditable = true;
+                readonly = "";
+            }
+            const dangerClass = isRes && needsSacFlags[idx] ? 'sac-needed-input' : '';
+            const classes = `w-full h-full text-center text-xs ${isEditable ? 'bg-white' : 'bg-transparent'} focus:outline-none ${isRes ? 'font-bold text-blue-700' : ''} ${dangerClass}`;
+
+            let displayVal = (val === null || val === undefined) ? '' : String(val).trim();
+            if (def.formatDecimals) {
+                const formatted = formatDisplayValue(val, def.formatDecimals, def.appendPercent, unit);
+                if (formatted !== null) displayVal = formatted;
+            }
+
+            tr.innerHTML += `<td class="border-r border-b border-slate-200 p-0 h-10 min-w-[80px]"><input data-row="${def.key}" data-idx="${idx}" class="${classes.trim()}" value="${displayVal || ''}" ${readonly} ${clickAttr}></td>`;
+        });
+        tbody.appendChild(tr);
+    });
+}
+
+function initEmptyChart() {
+    const ctx = document.getElementById('indicatorChart');
+    if (chartInstance) chartInstance.destroy();
+    chartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: { labels: baseMonths, datasets: [] },
+        options: { maintainAspectRatio: false, responsive: true, scales: { y: { beginAtZero: true } }, plugins: { title: { display: true, text: 'Sin Datos' } } }
+    });
+}
+
+let __chartUpdateTimer = null;
+function updateChart() {
+    clearTimeout(__chartUpdateTimer);
+    __chartUpdateTimer = setTimeout(() => {
+        const ctx = document.getElementById('indicatorChart');
+        if (chartInstance) chartInstance.destroy();
+
+        // Register plugin if not already registered (though UMD usually handles this, specific inclusion is safer for options)
+        // Note: With UMD ChartDataLabels is usually global. We'll pass it in plugins array if needed or configure options.
+
+        const unitEl = document.getElementById('resultUnit');
+        const unit = unitEl ? (unitEl.value || '') : '';
+
+        const suffix = currentYear ? ` ${String(currentYear).slice(-2)}` : '';
+        chartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: baseMonths.map(m => `${m}${suffix}`),
+                datasets: [
+                    {
+                        type: 'line',
+                        label: 'Meta',
+                        data: dataState.goal.map(v => scaleForUnit(v, unit) === null ? null : scaleForUnit(v, unit)),
+                        borderColor: '#fbbf24', // Amber for goal 
+                        borderWidth: 3,
+                        pointRadius: 0, // Hide points for cleaner look
+                        borderDash: [5, 5],
+                        order: 0,
+                        datalabels: {
+                            align: 'right',
+                            anchor: 'start',
+                            backgroundColor: '#fff',
+                            borderRadius: 4,
+                            color: '#d97706',
+                            font: { weight: 'bold', size: 10 },
+                            offset: 4,
+                            display: function (context) {
+                                return context.dataIndex === context.dataset.data.length - 1;
+                            }
+                        }
+                    },
+                    {
+                        type: 'bar',
+                        label: 'Resultado',
+                        data: dataState.res.map(v => scaleForUnit(v, unit) === null ? null : scaleForUnit(v, unit)),
+                        backgroundColor: '#0c4a6e', // Dark blue for result
+                        borderRadius: 4,
+                        order: 1,
+                        datalabels: {
+                            color: '#0f172a',
+                            anchor: 'center',
+                            align: 'center',
+                            backgroundColor: '#ffffff',
+                            borderRadius: 6,
+                            padding: { top: 2, bottom: 2, left: 6, right: 6 },
+                            font: { weight: 'bold', size: 11 },
+                            formatter: function (value) {
+                                return value === null ? '' : (unit === '%' ? Math.round(value) + '%' : value);
+                            }
+                        }
+                    }
+                ]
+            },
+            plugins: [ChartDataLabels], // Enable the plugin
+            options: (function () {
+                const unitEl = document.getElementById('resultUnit');
+                const unit = unitEl ? (unitEl.value || '') : '';
+                const yOpts = {
+                    beginAtZero: true,
+                    grid: { color: '#f1f5f9' },
+                    ticks: { font: { size: 11 } }
+                };
+                if (unit === '%') yOpts.suggestedMax = 105; // Little space on top
+
+                return {
+                    maintainAspectRatio: false,
+                    responsive: true,
+                    scales: {
+                        y: yOpts,
+                        x: { grid: { display: false } }
+                    },
+                    plugins: {
+                        legend: { labels: { usePointStyle: true, boxWidth: 6 } },
+                        tooltip: {
+                            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                            padding: 10,
+                            bodyFont: { size: 13 }
+                        },
+                        datalabels: {
+                            // Global defaults
+                            display: true
+                        }
+                    }
+                };
+            })()
+        });
+    }, 60);
+}
+
+window.logout = function () {
+    localStorage.removeItem('currentArea');
+    localStorage.removeItem('currentUser');
+    location.reload();
+};
+
+window.openWeightedModal = function () {
+    const unitEl = document.getElementById('resultUnit');
+    const unit = unitEl ? (unitEl.value || '') : '';
+    const avg = computeWeightedAverage(unit);
+    const display = formatNumber(avg, 2);
+    const valueEl = document.getElementById('weightedValue');
+    if (valueEl) valueEl.textContent = display === null ? '-' : (unit === '%' ? `${display}%` : display);
+    const modal = document.getElementById('weightedModal');
+    if (modal) modal.classList.remove('hidden');
+};
+
+window.closeWeightedModal = function () {
+    const modal = document.getElementById('weightedModal');
+    if (modal) modal.classList.add('hidden');
+};
+
+
+
