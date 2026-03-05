@@ -1,0 +1,793 @@
+﻿<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ficha Técnica de Indicadores</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body class="bg-slate-100 h-screen flex overflow-hidden">
+    <!-- SIDEBAR -->
+    <aside id="sidebar" class="w-64 bg-slate-900 text-white flex-shrink-0 hidden md:flex flex-col shadow-2xl z-30">
+        <div class="h-20 flex items-center justify-center border-b border-slate-700">
+            <i class="fa-solid fa-industry text-3xl text-blue-500 mr-2"></i>
+            <span class="font-bold text-lg tracking-wide">SIG MENU</span>
+        </div>
+        <div class="flex-1 overflow-y-auto py-4">
+            <nav class="space-y-1">
+                <a onclick="switchView('ficha')" id="nav-ficha" class="sidebar-link active">
+                    <i class="fa-solid fa-file-invoice w-6 text-center text-blue-400"></i> FICHA TÉCNICA
+                </a>
+                <a onclick="switchView('historico')" id="nav-historico" class="sidebar-link">
+                    <i class="fa-solid fa-clock-rotate-left w-6 text-center text-amber-400"></i> HISTÓRICO
+                </a>
+                <a onclick="setActiveAdminModule('create')" id="nav-admin-create" data-admin-module="create"
+                    class="sidebar-link hidden admin-only">
+                    <i class="fa-solid fa-file-circle-plus w-6 text-center text-emerald-400"></i> CREAR NUEVAS FICHAS
+                </a>
+                <a onclick="setActiveAdminModule('historic')" id="nav-admin-historic" data-admin-module="historic"
+                    class="sidebar-link hidden admin-only">
+                    <i class="fa-solid fa-clock-rotate-left w-6 text-center text-amber-400"></i> HISTÓRICO
+                </a>
+                <a onclick="setActiveAdminModule('dashboard')" id="nav-admin-dashboard" data-admin-module="dashboard"
+                    class="sidebar-link hidden admin-only">
+                    <i class="fa-solid fa-chart-line w-6 text-center text-blue-400"></i> DASHBOARD
+                </a>
+            </nav>
+        </div>
+
+        <div class="px-3 pb-4">
+            <button onclick="logout()"
+                class="w-full flex items-center gap-3 px-4 py-3 text-sm font-bold text-red-200 hover:text-white hover:bg-red-900/40 rounded-lg transition-colors">
+                <i class="fa-solid fa-right-from-bracket w-5 text-center"></i> Salir
+            </button>
+        </div>
+        <div class="p-4 border-t border-slate-800 text-xs text-slate-500 text-center">
+            <div id="loginInfoBadge" class="text-[11px] text-slate-400"></div>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="flex-1 overflow-x-hidden overflow-y-auto bg-slate-100 p-4 md:p-8 relative">
+        <button onclick="document.getElementById('sidebar').classList.toggle('show-mobile')"
+            class="md:hidden absolute top-4 left-4 z-40 bg-slate-800 text-white p-2 rounded shadow"><i
+                class="fa-solid fa-bars"></i></button>
+        <button id="sidebarToggleBtn" onclick="toggleSidebar()"
+            class="hidden md:flex absolute top-4 left-4 z-40 bg-slate-800 text-white p-2 rounded shadow items-center justify-center"
+            title="Ocultar barra lateral">
+            <i id="sidebarToggleIcon" class="fa-solid fa-angles-left"></i>
+        </button>
+
+        <div id="userSection"
+            class="max-w-[1400px] mx-auto bg-white shadow-2xl rounded-xl overflow-hidden border-t-8 border-blue-900 relative mt-8 md:mt-0">
+
+            <!-- HEADER -->
+            <div class="border-b-2 border-slate-800 bg-slate-50 transition-colors duration-300" id="mainHeader">
+                <div class="grid grid-cols-12">
+                    <div class="col-span-10 flex flex-col items-center justify-center p-6 border-r border-slate-200">
+                        <h1 class="text-3xl font-black uppercase tracking-widest text-slate-800 text-center"
+                            id="pageTitle">Ficha Técnica de Indicadores</h1>
+                    </div>
+                    <div class="col-span-2 p-3 text-xs flex flex-col justify-center space-y-2 bg-white">
+                        <div class="flex justify-between border-b pb-1"><span
+                                class="font-bold">CÓDIGO:</span><span>F-GG-SIG-12</span></div>
+                        <div class="flex justify-between border-b pb-1"><span
+                                class="font-bold">VERSIÓN:</span><span>02</span></div>
+                    </div>
+                </div>
+                <div
+                    class="grid grid-cols-1 md:grid-cols-4 bg-white text-xs border-t border-slate-200 divide-x divide-slate-200">
+                    <div class="p-4"><label class="label-header">Responsable</label><input id="headerResponsable"
+                            class="input-std input-readonly" readonly></div>
+                    <div class="p-4"><label class="label-header">Fecha Actualización</label><input type="date"
+                            id="updateDate" class="input-std font-bold text-blue-700 text-center"></div>
+                    <div class="p-4">
+                        <label class="label-header">Año del Periodo</label>
+                        <input id="periodYear" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4"
+                            list="periodYearList" class="input-std font-bold text-center text-lg" placeholder="2026">
+                        <datalist id="periodYearList"></datalist>
+                        <select id="periodYearSelect"
+                            class="input-std font-bold text-center text-lg hidden bg-amber-50 text-amber-900 border-amber-300 cursor-pointer"></select>
+                    </div>
+                    <div class="p-4"><label class="label-header">Actualizado Por</label><input id="headerUpdatedBy"
+                            class="input-std input-readonly" readonly></div>
+                </div>
+            </div>
+
+            <!-- BODY -->
+            <div class="p-8 bg-slate-50/50">
+
+                <!-- DEFINICIÓN -->
+                <div class="section-container">
+                    <div class="section-header"><i class="fa-solid fa-crosshairs mr-3 text-blue-600"></i> Definición del
+                        Indicador</div>
+                    <div class="p-6 grid grid-cols-12 gap-6">
+                        <div class="col-span-12 md:col-span-8">
+                            <label class="label-header">Indicador</label>
+                            <select id="indicatorName" class="input-std font-bold text-center text-lg"
+                                onchange="onIndicatorChange(this.value)"></select>
+                        </div>
+                        <div class="col-span-12 md:col-span-4 md:row-span-2 flex flex-col gap-6">
+                            <div>
+                                <label class="label-header text-center text-emerald-700">META OBJETIVO</label>
+                                <input type="text" id="currentGoal"
+                                    class="input-std font-bold text-emerald-700 text-center text-lg">
+                            </div>
+                            <div>
+                                <label class="label-header text-center">Meta Anterior</label>
+                                <input id="prevGoal" class="input-std input-readonly text-center" readonly>
+                            </div>
+                        </div>
+                        <div class="col-span-12 md:col-span-8">
+                            <label class="label-header">Objetivo</label>
+                            <textarea id="indicatorObjective" class="textarea-auto" rows="2"></textarea>
+                        </div>
+                        <div class="col-span-12">
+                            <label class="label-header">Comentarios</label>
+                            <textarea id="comments" class="textarea-auto bg-amber-50"></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- INFO MEDICIÓN -->
+                <div class="mb-8">
+                    <h3 class="text-sm font-bold text-slate-700 uppercase mb-4 pl-2 border-l-4 border-blue-600">
+                        Información para Medición</h3>
+                    <div class="grid grid-cols-1 gap-6">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div class="info-card">
+                                <label class="label-header text-center">Frecuencia</label>
+                                <select id="frequency" class="w-full text-center font-bold border-none bg-transparent">
+                                    <option>MENSUAL</option>
+                                    <option>ANUAL</option>
+                                </select>
+                            </div>
+                            <div class="info-card">
+                                <label class="label-header text-center">Unidad</label>
+                                <select id="resultUnit" class="w-full text-center font-bold border-none bg-transparent">
+                                    <option>%</option>
+                                    <option>Unid.</option>
+                                </select>
+                            </div>
+                            <div class="info-card">
+                                <label class="label-header text-center">Fuente</label>
+                                <input id="sourceInfo" class="w-full text-center border-none bg-transparent">
+                            </div>
+                        </div>
+                        <div class="info-card items-center justify-center bg-blue-50/50">
+                            <label class="label-header text-blue-600 mb-2">Fórmula</label>
+                            <div class="grid gap-3 w-full">
+                                <div id="formulaDisplay" class="fraction-container text-sm"></div>
+                                <div id="formulaCalcDisplay" class="text-xs font-semibold text-slate-600 text-center hidden"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TABLA MENSUAL -->
+                <div class="mb-12">
+                    <h3 class="text-sm font-bold text-slate-700 uppercase mb-4 pl-2 border-l-4 border-blue-600">
+                        Comportamiento y Medición</h3>
+                    <div class="overflow-x-auto rounded-xl shadow border border-slate-200 bg-white">
+                        <table class="w-full text-xs text-center border-collapse">
+                            <thead class="bg-slate-800 text-white uppercase">
+                                <tr id="tableHeaderRow">
+                                    <th class="p-3 text-left w-56 sticky left-0 bg-slate-900 z-10">Concepto</th>
+                                </tr>
+                            </thead>
+                            <tbody id="horizontalTableBody" class="font-medium text-slate-600"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- GRÁFICO -->
+            <div class="bg-white p-6 rounded-xl shadow border border-slate-200 h-96 relative">
+                    <canvas id="indicatorChart"></canvas>
+                </div>
+
+            </div>
+        </div>
+
+        <div id="adminSection"
+            class="max-w-[1400px] mx-auto hidden bg-white shadow-2xl rounded-xl overflow-hidden border-t-8 border-slate-900 relative mt-8 md:mt-6">
+            <div class="border-b-2 border-slate-800 bg-slate-50">
+                <div class="grid grid-cols-12">
+                    <div class="col-span-12 flex flex-col items-center p-4"></div>
+                </div>
+            </div>
+            <div class="p-8 bg-slate-50/50 space-y-6">
+                <div id="adminModuleCreate"
+                    class="admin-module-section bg-white rounded-xl shadow border border-slate-200 p-6 space-y-6">
+                    <div class="border-b-2 border-slate-800 bg-slate-50 rounded-lg" id="adminCreateHeader">
+                        <div class="grid grid-cols-12">
+                            <div class="col-span-10 flex flex-col items-center justify-center p-6 border-r border-slate-200">
+                                <h2 id="adminCreateTitle" class="text-2xl font-black uppercase tracking-widest text-slate-800 text-center">
+                                    Crear nueva ficha</h2>
+                            </div>
+                            <div class="col-span-2 p-3 text-xs flex flex-col justify-center space-y-2 bg-white">
+                                <div class="flex justify-between border-b pb-1"><span
+                                        class="font-bold">CÓDIGO:</span><span>F-GG-SIG-12</span></div>
+                                <div class="flex justify-between border-b pb-1"><span
+                                        class="font-bold">VERSIÓN:</span><span>02</span></div>
+                            </div>
+                        </div>
+                        <div
+                            class="grid grid-cols-1 md:grid-cols-4 bg-white text-xs border-t border-slate-200 divide-x divide-slate-200">
+                            <div class="p-4">
+                                <label class="label-header">Área</label>
+                                <select id="adminCreateArea" class="input-std"></select>
+                            </div>
+                            <div class="p-4"><label class="label-header">Responsable</label><input
+                                    id="adminCreateResponsable" class="input-std"></div>
+                            <div class="p-4"><label class="label-header">Fecha Actualización</label><input type="date"
+                                    id="adminCreateUpdateDate" class="input-std font-bold text-blue-700 text-center">
+                            </div>
+                            <div class="p-4">
+                                <label class="label-header">Año del Periodo</label>
+                                <input type="text" id="adminCreateYear" inputmode="numeric" pattern="[0-9]*"
+                                    maxlength="4" class="input-std font-bold text-center text-lg" placeholder="2026">
+                            </div>
+                            <input type="hidden" id="adminCreateUpdatedBy">
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 bg-white text-xs border-t border-slate-200 p-4 items-end">
+                            <div class="md:col-span-1">
+                                <label class="label-header label-compact">Año de referencia</label>
+                                <select id="adminCreateReferenceYear" class="input-std"></select>
+                            </div>
+                            <div class="md:col-span-1">
+                                <label class="label-header label-compact">Cierre</label>
+                                <label class="flex items-center gap-2 h-10 px-3 border border-slate-200 rounded-lg bg-white text-sm font-semibold text-slate-700">
+                                    <input id="adminCreateCloseFicha" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                                    Cerrar ficha
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="section-container">
+                        <div class="section-header"><i class="fa-solid fa-crosshairs mr-3 text-blue-600"></i> Definición
+                            del Indicador</div>
+                        <div class="p-6 grid grid-cols-12 gap-6">
+                            <div class="col-span-12 md:col-span-8">
+                                <label class="label-header">Indicador</label>
+                                <input id="adminCreateIndicator" class="input-std font-bold text-blue-900" list="adminCreateIndicatorList" placeholder="Escribe o selecciona indicador">
+                                <datalist id="adminCreateIndicatorList"></datalist>
+                            </div>
+                            <div class="col-span-12 md:col-span-4 md:row-span-2 flex flex-col gap-6">
+                                <div>
+                                    <label class="label-header text-center text-emerald-700">META OBJETIVO</label>
+                                    <input type="text" id="adminCreateMeta" class="input-std font-bold text-emerald-700 text-center text-lg">
+                                </div>
+                                <div>
+                                    <label class="label-header text-center">Meta Anterior</label>
+                                    <input id="adminCreatePrevGoal" class="input-std text-center">
+                                </div>
+                            </div>
+                            <div class="col-span-12 md:col-span-8">
+                                <label class="label-header">Objetivo</label>
+                                <textarea id="adminCreateObjective" class="textarea-auto" rows="2"></textarea>
+                            </div>
+                            <div class="col-span-12">
+                                <label class="label-header">Comentarios</label>
+                                <textarea id="adminCreateComments" class="textarea-auto bg-amber-50"></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <h3 class="text-sm font-bold text-slate-700 uppercase mb-4 pl-2 border-l-4 border-blue-600">
+                            Información para Medición</h3>
+                        <div class="grid grid-cols-1 gap-6">
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div class="info-card">
+                                    <label class="label-header text-center">Frecuencia</label>
+                                    <select id="adminCreateFrequency" class="w-full text-center font-bold border-none bg-transparent">
+                                        <option value="MENSUAL">Mensual</option>
+                                        <option value="TRIMESTRAL">Trimestral</option>
+                                        <option value="ANUAL">Anual</option>
+                                    </select>
+                                </div>
+                                <div class="info-card">
+                                    <label class="label-header text-center">Unidad</label>
+                                    <select id="adminCreateUnit" class="w-full text-center font-bold border-none bg-transparent">
+                                        <option value="%">%</option>
+                                        <option value="Unid.">Unid.</option>
+                                    </select>
+                                </div>
+                                <div class="info-card">
+                                    <label class="label-header text-center">Fuente</label>
+                                    <input id="adminCreateSource" class="w-full text-center border-none bg-transparent">
+                                </div>
+                            </div>
+                            <div class="info-card items-center justify-center bg-blue-50/50">
+                                <label class="label-header text-blue-600 mb-2">Fórmula</label>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                                    <div class="bg-white border border-slate-200 rounded-lg p-3">
+                                        <div class="fraction-label text-center">Numerador</div>
+                                        <input id="adminCreateFormulaNum" class="input-std text-center mt-2" placeholder="Numerador">
+                                        <div class="h-px bg-slate-200 my-3"></div>
+                                        <div id="adminCreateDenWrapper">
+                                            <div class="fraction-label text-center">Denominador</div>
+                                            <input id="adminCreateFormulaDen" class="input-std text-center mt-2" placeholder="Denominador">
+                                        </div>
+                                    </div>
+                                    <div class="grid gap-3">
+                                        <div id="adminFormulaPreviewWrapper" class="preview-clickable flex flex-col items-center" role="button" tabindex="0"
+                                            onclick="openAdminFormulaModal()" onkeydown="handleAdminFormulaKey(event)">
+                                            <div class="fraction-label text-center">Vista previa</div>
+                                            <div id="adminCreateFormulaPreview" class="formula-preview"></div>
+                                            <div class="text-[11px] text-slate-500 mt-2 text-center">Clic para configurar</div>
+                                        </div>
+                                        <input type="hidden" id="adminCreateFormulaSpecial">
+                                        <input type="hidden" id="adminCreateFormulaMode" value="fraction">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-6">
+                        <h3 class="text-sm font-bold text-slate-700 uppercase mb-4 pl-2 border-l-4 border-blue-600">
+                            Comportamiento y Medición</h3>
+                        <div class="overflow-x-auto rounded-xl shadow border border-slate-200 bg-white">
+                            <table class="w-full text-xs text-center border-collapse">
+                                <thead class="bg-slate-800 text-white uppercase">
+                                    <tr id="adminCreateTableHeader">
+                                        <th class="p-3 text-left w-56 sticky left-0 bg-slate-900 z-10">Concepto</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adminCreateTableBody" class="font-medium text-slate-600"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-wrap gap-2">
+                        <button id="adminCreateSaveButton" type="button"
+                            class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold"
+                            onclick="handleAdminFichaSave()">Generar nueva ficha</button>
+                        <button id="adminCreateDeleteButton" type="button"
+                            class="px-4 py-2 bg-rose-600 text-white rounded-lg text-sm font-semibold"
+                            onclick="handleAdminFichaDelete()">Eliminar ficha</button>
+                        <button id="adminCreateResetButton" type="button"
+                            class="px-4 py-2 border border-slate-300 rounded-lg text-sm font-semibold text-slate-600"
+                            onclick="resetAdminCreateForm()">Limpiar formulario</button>
+                    </div>
+                    <div id="adminCreateMessage" class="text-xs text-emerald-700 mt-2 hidden"></div>
+                </div>
+
+                <div id="adminModuleHistoric"
+                    class="admin-module-section hidden bg-white rounded-xl shadow border border-slate-200 p-6 space-y-6">
+                    <div>
+                        <h2 class="text-lg font-semibold text-slate-700 uppercase tracking-wide">Histórico administrativo</h2>
+                        <p class="text-xs text-slate-500 mt-1">Consulta el comportamiento pasado por área, año e
+                            indicador.</p>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div>
+                            <label class="label-header">Área</label>
+                            <select id="adminHistoricArea" class="input-std"></select>
+                        </div>
+                        <div>
+                            <label class="label-header">Año</label>
+                            <select id="adminHistoricYear" class="input-std"></select>
+                        </div>
+                        <div>
+                            <label class="label-header">Indicador</label>
+                            <select id="adminHistoricIndicator" class="input-std" disabled></select>
+                        </div>
+                        <div class="flex items-end">
+                            <button type="button"
+                                class="w-full px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-semibold"
+                                onclick="handleAdminHistoricQuery()">Consultar</button>
+                        </div>
+                    </div>
+                    <div id="adminHistoricMessage" class="text-xs text-slate-500"></div>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                        Al consultar, se abrira la ficha completa en el modulo de creacion con modo lectura.
+                    </div>
+                </div>
+
+                <div id="adminModuleDashboard"
+                    class="admin-module-section hidden bg-white rounded-xl shadow border border-slate-200 p-6 space-y-4">
+                    <div>
+                        <h2 class="text-lg font-semibold text-slate-700 uppercase tracking-wide">Dashboard de comportamiento</h2>
+                        <p class="text-xs text-slate-500 mt-1">Elige un rango de años para observar la tendencia del
+                            indicador en el área seleccionada.</p>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+                        <div>
+                            <label class="label-header">Área</label>
+                            <select id="adminDashboardArea" class="input-std"></select>
+                        </div>
+                        <div>
+                            <label class="label-header">Indicador</label>
+                            <select id="adminDashboardIndicator" class="input-std"></select>
+                        </div>
+                        <div>
+                            <label class="label-header">Año inicio</label>
+                            <select id="adminDashboardStartYear" class="input-std"></select>
+                        </div>
+                        <div>
+                            <label class="label-header">Año fin</label>
+                            <select id="adminDashboardEndYear" class="input-std"></select>
+                        </div>
+                        <div class="flex items-end">
+                            <button type="button"
+                                class="w-full px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-semibold"
+                                onclick="handleAdminDashboardQuery()">Mostrar comportamiento</button>
+                        </div>
+                    </div>
+                    <div id="adminDashboardMessage" class="text-xs text-slate-500"></div>
+                    <div class="grid gap-4">
+                        <div class="bg-white border border-slate-200 rounded-xl p-4 h-72">
+                            <canvas id="adminDashboardChart" class="h-full w-full"></canvas>
+                        </div>
+                        <div class="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+                            <h3 class="text-sm font-semibold text-slate-500 uppercase tracking-wide">Resumen</h3>
+                            <div id="adminDashboardStats" class="text-sm text-slate-600 space-y-1"></div>
+                            <div class="overflow-x-auto mt-4">
+                                <table class="min-w-full text-sm text-slate-600">
+                                    <thead class="text-xs uppercase text-slate-400 bg-slate-50">
+                                        <tr>
+                                            <th class="py-2 px-3 text-left">Año</th>
+                                            <th class="py-2 px-3 text-right">Resultado promedio</th>
+                                            <th class="py-2 px-3 text-right">Meta promedio</th>
+                                            <th class="py-2 px-3 text-center">Meses registrados</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="adminDashboardSummaryBody" class="divide-y divide-slate-100"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- MODAL LOGIN -->
+    <div id="loginModal" class="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center backdrop-blur-sm">
+        <div class="bg-white p-8 rounded-2xl w-96 shadow-2xl border-t-8 border-blue-600">
+            <h3 class="text-xl font-black text-slate-800 mb-6">Iniciar Sesión</h3>
+            <div class="space-y-4">
+                <div><label class="label-header">Area</label><select id="loginArea" class="input-std"></select></div>
+                <div><label class="label-header">Usuario</label><select id="loginUser" class="input-std"></select></div>
+                <div id="loginStatus" class="text-xs text-slate-500 hidden"></div>
+                <button id="loginRetry" type="button"
+                    class="w-full text-xs font-semibold text-slate-600 border border-slate-200 rounded-lg py-2 hover:bg-slate-50 hidden">Reintentar
+                    cargar</button>
+                <button id="loginSubmit"
+                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg shadow mt-4 transition">INGRESAR</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL PROMEDIO PONDERADO -->
+    <div id="weightedModal" class="hidden fixed inset-0 bg-slate-900/70 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-5 relative">
+            <button onclick="closeWeightedModal()" class="absolute top-3 right-3 text-slate-400 hover:text-slate-600"><i
+                    class="fa-solid fa-xmark"></i></button>
+            <h3 class="text-sm font-bold text-slate-800 mb-2">Promedio Ponderado</h3>
+            <p class="text-xs text-slate-500 mb-3">Resultado ponderado total</p>
+            <div id="weightedValue" class="text-2xl font-black text-blue-700 text-center">-</div>
+        </div>
+    </div>
+
+    <!-- MODAL SAC -->
+    <div id="sacModal" class="hidden fixed inset-0 bg-slate-900/90 z-50 flex items-center justify-center p-4">
+        <div class="sheet relative w-full max-w-4xl">
+            <button onclick="document.getElementById('sacModal').classList.add('hidden')" class="modal-close"><i
+                    class="fa-solid fa-circle-xmark"></i></button>
+            <table class="mb-4">
+                <tr>
+                    <td rowspan="3" class="text-center text-lg font-black uppercase">SOLICITUD DE ACCIÓN CORRECTIVA (SAC)</td>
+                    <td class="bg-gray-100 font-bold text-xs">SAC ID:</td>
+                    <td class="text-center text-xs"><input type="text" id="sacId" class="form-input font-bold text-blue-600" readonly></td>
+                </tr>
+                <tr>
+                    <td class="bg-gray-100 font-bold text-xs">CÓDIGO:</td>
+                    <td class="text-center text-xs">FP-GG-SIG-05-02</td>
+                </tr>
+                <tr>
+                    <td class="bg-gray-100 font-bold text-xs">Versión:</td>
+                    <td class="text-center text-xs">02</td>
+                </tr>
+            </table>
+
+            <div class="grid grid-cols-2 gap-4 mb-4 text-sm">
+                <div class="flex items-center gap-2">
+                    <label class="font-bold w-20 text-xs">Área:</label>
+                    <input type="text" id="sacArea" class="form-input" readonly>
+                </div>
+                <div class="flex items-center gap-2">
+                    <label class="font-bold w-20 text-xs">Indicador:</label>
+                    <input type="text" id="sacIndicador" class="form-input" readonly>
+                </div>
+                <div class="flex items-center gap-2">
+                    <label class="font-bold w-20 text-xs">Período:</label>
+                    <input type="text" id="sacPeriodo" class="form-input" readonly>
+                </div>
+                <div class="flex items-center gap-2">
+                    <label class="font-bold w-20 text-xs">Responsable:</label>
+                    <input type="text" id="sacResponsable" class="form-input" readonly>
+                </div>
+                <div class="flex items-center gap-2">
+                    <label class="font-bold w-20 text-xs">Fecha:</label>
+                    <input id="sacFecha" type="date" class="form-input" readonly>
+                </div>
+                <div class="flex items-center gap-2">
+                    <label class="font-bold w-24 text-xs">Reportado por:</label>
+                    <input type="text" id="sacReportadoPor" class="form-input">
+                </div>
+            </div>
+
+            <div class="mb-4">
+                <div class="section-title">Descripción del Hallazgo / No Conformidad</div>
+                <textarea id="sacDescripcion" rows="4" placeholder="Describa la causa raíz y la acción correctiva..."></textarea>
+            </div>
+
+            <div class="mb-4">
+                <div class="font-bold text-sm mb-1">Equipo evaluador</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="w-10">N°</th>
+                            <th>Nombres y Apellidos</th>
+                            <th class="w-32">Área</th>
+                            <th class="w-16">Firma</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sacEvaluatorBody">
+                        <tr>
+                            <td class="text-center">1</td>
+                            <td><input id="sacEval1Nombre" type="text" placeholder="Luis Rios" class="table-input text-left pl-2"></td>
+                            <td><input id="sacEval1Area" type="text" placeholder="Sostenibilidad" class="table-input"></td>
+                            <td class="text-center"><input id="sacEval1Firma" type="checkbox"></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center">2</td>
+                            <td><input id="sacEval2Nombre" type="text" placeholder="Diego Dominguez" class="table-input text-left pl-2"></td>
+                            <td><input id="sacEval2Area" type="text" placeholder="SIG" class="table-input"></td>
+                            <td class="text-center"><input id="sacEval2Firma" type="checkbox"></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center">3</td>
+                            <td><input id="sacEval3Nombre" type="text" placeholder="Zumy Lengua" class="table-input text-left pl-2"></td>
+                            <td><input id="sacEval3Area" type="text" placeholder="SIG" class="table-input"></td>
+                            <td class="text-center"><input id="sacEval3Firma" type="checkbox"></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center">4</td>
+                            <td><input id="sacEval4Nombre" type="text" placeholder="Carlos Gonzales" class="table-input text-left pl-2"></td>
+                            <td><input id="sacEval4Area" type="text" placeholder="Confecciones" class="table-input"></td>
+                            <td class="text-center"><input id="sacEval4Firma" type="checkbox"></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center">5</td>
+                            <td><input id="sacEval5Nombre" type="text" placeholder="Nombre evaluador" class="table-input text-left pl-2"></td>
+                            <td><input id="sacEval5Area" type="text" placeholder="Área" class="table-input"></td>
+                            <td class="text-center"><input id="sacEval5Firma" type="checkbox"></td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="mt-2 text-right">
+                    <button id="sacAddEvaluatorRowBtn" type="button" onclick="addSACEvaluatorRow()"
+                        class="bg-slate-100 text-slate-700 px-3 py-1.5 rounded text-xs font-semibold hover:bg-slate-200">
+                        <i class="fa-solid fa-plus mr-1"></i>Agregar fila
+                    </button>
+                </div>
+            </div>
+
+            <div class="mb-4">
+                <div class="section-title">Acciones correctivas (Plan de Acción)</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="w-10">N°</th>
+                            <th>Acción</th>
+                            <th class="w-32">Responsable</th>
+                            <th class="w-24">Fecha</th>
+                            <th class="w-16">Firma</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sacCorrectiveActions">
+                        <tr>
+                            <td class="text-center">1</td>
+                            <td><input id="sacAcc1Accion" type="text" class="table-input text-left pl-2"></td>
+                            <td><input id="sacAcc1Responsable" type="text" class="table-input"></td>
+                            <td><input id="sacAcc1Fecha" type="date" class="table-input"></td>
+                            <td class="text-center"><input id="sacAcc1Firma" type="checkbox"></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center">2</td>
+                            <td><input id="sacAcc2Accion" type="text" class="table-input text-left pl-2"></td>
+                            <td><input id="sacAcc2Responsable" type="text" class="table-input"></td>
+                            <td><input id="sacAcc2Fecha" type="date" class="table-input"></td>
+                            <td class="text-center"><input id="sacAcc2Firma" type="checkbox"></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center">3</td>
+                            <td><input id="sacAcc3Accion" type="text" class="table-input text-left pl-2"></td>
+                            <td><input id="sacAcc3Responsable" type="text" class="table-input"></td>
+                            <td><input id="sacAcc3Fecha" type="date" class="table-input"></td>
+                            <td class="text-center"><input id="sacAcc3Firma" type="checkbox"></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center">4</td>
+                            <td><input id="sacAcc4Accion" type="text" class="table-input text-left pl-2"></td>
+                            <td><input id="sacAcc4Responsable" type="text" class="table-input"></td>
+                            <td><input id="sacAcc4Fecha" type="date" class="table-input"></td>
+                            <td class="text-center"><input id="sacAcc4Firma" type="checkbox"></td>
+                        </tr>
+                        <tr>
+                            <td class="text-center">5</td>
+                            <td><input id="sacAcc5Accion" type="text" class="table-input text-left pl-2"></td>
+                            <td><input id="sacAcc5Responsable" type="text" class="table-input"></td>
+                            <td><input id="sacAcc5Fecha" type="date" class="table-input"></td>
+                            <td class="text-center"><input id="sacAcc5Firma" type="checkbox"></td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="mt-2 text-right">
+                    <button id="sacAddActionRowBtn" type="button" onclick="addSACActionRow()"
+                        class="bg-slate-100 text-slate-700 px-3 py-1.5 rounded text-xs font-semibold hover:bg-slate-200">
+                        <i class="fa-solid fa-plus mr-1"></i>Agregar fila
+                    </button>
+                </div>
+            </div>
+
+            <div class="mb-4">
+                <div class="section-title">Análisis de causa raíz</div>
+                <textarea rows="3" id="sacAnalisis" placeholder="Explique la causa raíz (5 porqués, Ishikawa)..."></textarea>
+            </div>
+
+            <div class="mb-4">
+                <div class="section-title">Verificación de eficacia</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="w-10">N°</th>
+                            <th>Acción</th>
+                            <th class="w-32">Responsable</th>
+                            <th class="w-24">Fecha</th>
+                            <th class="w-16">Firma</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sacVerification">
+                        <tr>
+                            <td class="text-center">1</td>
+                            <td><input id="sacVerif1Accion" type="text" class="table-input text-left pl-2"></td>
+                            <td><input id="sacVerif1Responsable" type="text" class="table-input"></td>
+                            <td><input id="sacVerif1Fecha" type="date" class="table-input"></td>
+                            <td class="text-center"><input id="sacVerif1Firma" type="checkbox"></td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="mt-2 text-right">
+                    <button id="sacAddVerificationRowBtn" type="button" onclick="addSACVerificationRow()"
+                        class="bg-slate-100 text-slate-700 px-3 py-1.5 rounded text-xs font-semibold hover:bg-slate-200">
+                        <i class="fa-solid fa-plus mr-1"></i>Agregar fila
+                    </button>
+                </div>
+                <div class="mt-3 flex items-center justify-end gap-2">
+                    <input type="hidden" id="sacEficacia" value="">
+                    <span class="text-xs text-gray-500 mr-2">Eficacia:</span>
+                    <button id="sacEficazBtn" type="button" onclick="setSACEficacia('EFICAZ')"
+                        class="bg-emerald-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-emerald-700">Es eficaz</button>
+                    <button id="sacNoEficazBtn" type="button" onclick="setSACEficacia('NO_EFICAZ')"
+                        class="bg-rose-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-rose-700">No es eficaz</button>
+                </div>
+            </div>
+
+            <div class="mb-6">
+                <div class="section-title">Ruta de adjuntos</div>
+                <p class="text-xs text-gray-500 mb-2">Ingrese la ruta donde están los archivos de respaldo.</p>
+                <input id="sacAttachmentPath" type="text" class="form-input" placeholder="Ejemplo: \\Servidor\SAC\Compras\Ene-26">
+            </div>
+
+            <div class="flex justify-end gap-3">
+                <button onclick="saveCurrentSAC()" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm font-bold">Guardar SAC</button>
+                <button onclick="document.getElementById('sacModal').classList.add('hidden')" class="bg-gray-200 text-gray-600 px-4 py-2 rounded text-sm font-semibold">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="sacPendingModal" class="hidden fixed inset-0 bg-slate-900/90 z-50 flex items-center justify-center p-4">
+        <div class="sheet relative w-full max-w-3xl">
+            <button onclick="closePendingSACModal()" class="modal-close"><i
+                    class="fa-solid fa-circle-xmark"></i></button>
+            <div class="section-title mb-2">SAC pendientes</div>
+            <p class="text-xs text-slate-500 mb-4">Tienes SAC pendientes por gestionar.</p>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm text-slate-600">
+                    <thead class="text-xs uppercase text-slate-400 bg-slate-50">
+                        <tr>
+                            <th class="py-2 px-3 text-left">Año</th>
+                            <th class="py-2 px-3 text-left">Indicador</th>
+                            <th class="py-2 px-3 text-right">Numerador</th>
+                            <th class="py-2 px-3 text-right">Denominador</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sacPendingBody" class="divide-y divide-slate-100"></tbody>
+                </table>
+            </div>
+            <div class="mt-4 text-right">
+                <button onclick="closePendingSACModal()"
+                    class="bg-gray-200 text-gray-600 px-4 py-2 rounded text-sm font-semibold">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: ¿Desea realizar SAC? -->
+    <div id="sacPromptModal" class="hidden fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 border-t-4 border-amber-500 text-center relative">
+            <button id="sacPromptClose" type="button" class="modal-close" aria-label="Cerrar">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            <div class="text-4xl mb-3"><i class="fa-solid fa-triangle-exclamation text-amber-500"></i></div>
+            <h3 class="text-lg font-bold text-slate-800 mb-1">Resultado por debajo de la meta</h3>
+            <p class="text-sm text-slate-500 mb-1">Período: <strong id="sacPromptPeriod" class="text-slate-700">-</strong></p>
+            <p class="text-sm text-slate-600 mb-5">¿Desea realizar la Solicitud de Acción Correctiva (SAC)?</p>
+            <div class="flex flex-col gap-3">
+                <button id="sacPromptYes"
+                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg shadow transition text-sm">
+                    <i class="fa-solid fa-pen-to-square mr-2"></i>Sí, llenar ahora
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL CONFIG FORMULA (ADMIN) -->
+    <div id="formulaConfigModal" class="hidden fixed inset-0 bg-slate-900/70 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-5 relative">
+            <button onclick="closeAdminFormulaModal()" class="absolute top-3 right-3 text-slate-400 hover:text-slate-600">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            <h3 class="text-sm font-bold text-slate-800 mb-2">Configurar fórmula</h3>
+            <p class="text-xs text-slate-500 mb-4">Elige si el indicador usa uno o dos componentes y agrega el especial.</p>
+            <div class="space-y-3 text-sm">
+                <label class="flex items-center gap-2">
+                    <input type="radio" name="adminFormulaMode" value="single">
+                    <span>Solo numerador</span>
+                </label>
+                <label class="flex items-center gap-2">
+                    <input type="radio" name="adminFormulaMode" value="fraction">
+                    <span>Numerador / Denominador</span>
+                </label>
+            </div>
+            <div class="mt-4">
+                <label class="label-header text-center">Especial</label>
+                <input id="adminFormulaSpecialInput" class="input-std text-center" placeholder="x 100%">
+            </div>
+            <div class="mt-4 flex justify-end gap-2">
+                <button type="button" onclick="closeAdminFormulaModal()"
+                    class="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-semibold">Cancelar</button>
+                <button type="button" onclick="saveAdminFormulaModal()"
+                    class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold">Guardar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/app_config.js"></script>
+    <script src="js/usu_dash.js"></script>
+    <script src="js/usu_ficha.js"></script>
+    <script src="js/usu_histo.js"></script>
+    <script src="js/usu_sac.js"></script>
+    <script src="js/adm_crea.js"></script>
+    <script src="js/adm_histo.js"></script>
+    <script src="js/adm_dash.js"></script>
+</body>
+
+</html>
+
+
+
+
